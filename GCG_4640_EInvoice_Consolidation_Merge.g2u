@@ -1,0 +1,338 @@
+Program.Sub.Preflight.Start
+Variable.Global.sPDFName.Declare(String)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+'Quote 8183
+'TRT
+'11/29/16
+V.Local.sError.Declare(String)
+F.ODBC.Connection!conC.OpenConnection(v.Ambient.Ccon,v.Ambient.Cuser,v.Ambient.Cpass) 
+F.ODBC.Connection!conX.OpenConnection(v.Ambient.PDSN,v.Ambient.PUser,v.Ambient.PPass) 
+F.Intrinsic.UI.InvokeWaitDialog("Gathering created E-Invoice(s)...........")
+Function.Intrinsic.Control.CallSub(loaddata)
+F.Intrinsic.UI.ChangeWaitStatus("Merging PDFs and Sending out Emails...........")
+Function.Intrinsic.Control.CallSub(processemails)
+F.Intrinsic.UI.CloseWaitDialog
+F.Intrinsic.Control.CallSub(Unload)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_4640_EInvoice_Consolidation_Merge.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.Debug.SetLA(V.Local.sError)
+	Function.Intrinsic.Control.CallSub(unload)
+Function.Intrinsic.Control.EndIf
+Program.Sub.Main.End
+
+Program.Sub.unload.Start
+F.Intrinsic.Control.SetErrorHandler("unload_Err")
+F.Intrinsic.Control.ClearErrors
+V.Local.sError.Declare(String)
+
+F.ODBC.Connection!conC.Close
+F.ODBC.Connection!conX.Close 
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("unload_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_4640_EInvoice_Consolidation_Merge.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.Debug.SetLA(v.Local.sError) 
+	Function.Intrinsic.Control.End
+
+Function.Intrinsic.Control.EndIf
+Program.Sub.unload.End
+
+Program.Sub.LoadData.Start
+F.Intrinsic.Control.SetErrorHandler("LoadData_Err")
+F.Intrinsic.Control.ClearErrors
+V.Local.sError.Declare(String)
+v.Local.sSQl.Declare(String) 
+
+F.Intrinsic.String.Build("Select EID,USERID,MODE,SUBJECT,SenderName,SenderEmail,RecipientName,RecipientEmail,Meta0,Meta1 From COURIER_EMAILBODY Where COCODE = '{0}' ANd Mode = '{1}' And DeferredDelivery Is Not Null",v.Caller.CompanyCode,"5",v.Local.sSQl) 
+F.Data.DataTable.CreateFromSQL("CEmail","conC",v.Local.sSQl,True) 
+'unique values 
+F.Intrinsic.String.Build("Select Distinct Meta0 From Courier_Emailbody Where COCODE = '{0}' ANd Mode = '{1}' And DeferredDelivery Is Not Null",v.Caller.CompanyCode,"5",v.Local.sSQl) 
+F.Data.DataTable.CreateFromSQL("CUEmail","conC",v.Local.sSQl,True)
+F.Data.Dictionary.CreateFromSQL("CustMast","ConX","Select lTrim(Rtrim(Customer)) As Customer, Name_Customer From V_Customer_Master Order by Customer",4)
+F.Data.Dictionary.SetDefaultReturn("CustMast","")
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("LoadData_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_4640_EInvoice_Consolidation_Merge.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.Debug.SetLA(v.Local.sError)
+	Function.Intrinsic.Control.CallSub(unload)
+Function.Intrinsic.Control.EndIf
+Program.Sub.LoadData.End
+
+Program.Sub.ProcessEmails.Start
+F.Intrinsic.Control.SetErrorHandler("ProcessEmails_Err")
+F.Intrinsic.Control.ClearErrors
+V.Local.sError.Declare(String)
+v.Local.sQuery.Declare(String) 
+v.Local.sRet.Declare(String) 
+v.Local.sFile.Declare(String)
+v.Local.sFQNPDFS.Declare(String) 
+v.Local.sRecipients.Declare(String)
+v.Local.sSubject.Declare(String)
+v.Local.sBody.Declare(String) 
+v.Local.sSender.Declare(String) 
+v.Local.iC.Declare(Long)
+v.Local.iR.Declare(Long)
+v.Local.bEx.Declare(Boolean)
+v.Local.bMerge.Declare(Boolean)
+v.Local.sCustName.Declare(String)
+v.Local.sPDFName.Declare(String)
+V.Local.iId.Declare(Long)
+v.Local.sCRLF.Declare(String)
+
+'This sub will process the emails and consolidate the files. 
+'our 'cUEmail is our Unique Meta0 data emails. 
+F.Intrinsic.Control.For(v.Local.ic,0,v.DataTable.CUEmail.RowCount--,1) 
+	'making sure meta daata 0 is not blank
+	F.Intrinsic.Control.If(v.DataTable.CUEMAIL(v.Local.iC).Meta0!FieldValTrim,=,"")
+		F.Intrinsic.Control.Next(V.Local.iC)
+	F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.String.Build("Meta0 = '{0}'",v.DataTable.CUEMAIL(v.Local.iC).Meta0!FieldValTrim,v.Local.sQuery) 
+	F.Data.DataTable.Select("CEmail",v.Local.sQuery,v.Local.sRet) 
+	F.Intrinsic.String.Split(v.DataTable.CUEMAIL(v.Local.iC).Meta0!FieldValTrim,"*!*",v.Local.sCustName)
+	v.Local.sCustName(0).Set(v.dictionary.CustMast![v.local.sCustName(0)])	
+	Function.Intrinsic.Control.If(v.Local.sRet.Trim,<>,"***NORETURN***") 
+		f.Intrinsic.String.Split(v.Local.sRet,"*!*",v.Local.sRet) 
+		F.Intrinsic.Control.For(v.Local.iR,0,v.Local.sRet.UBound,1)
+			f.Intrinsic.Control.If(v.Local.iR,=,0)
+				v.Local.sFile.Redim(0,v.Local.sRet.UBound)
+				v.Local.sRecipients.Redim(0,v.Local.sRet.UBound)
+				'build sender only once
+				f.Intrinsic.String.Build("{0}*!*{1}",v.DataTable.CEMAIL(v.Local.sRet(v.Local.iR)).SenderEmail!FieldValTrim,v.DataTable.CEMAIL(v.Local.sRet(v.Local.iR)).SenderName!Fieldvaltrim,v.Local.sSender)
+			Function.Intrinsic.Control.EndIf 				
+			'MAKE THE PDF FILES AN ARRAY AND MAKE THE RECIPIENTS AN ARRAY THEN WE JOIN.
+			'so now we grab the PDF name, grab the recipname and email, then grab the 
+			F.Intrinsic.String.Build("{0}\Plugins\Invoices\{1}",v.Caller.GlobalDir,v.DataTable.CEMAIL(v.Local.sret(v.Local.iR)).Meta1!FieldvalTrim,v.Local.sFile(V.Local.iR)) 
+			'make sure file exists. 
+			F.Intrinsic.File.Exists(v.Local.sFile,v.Local.bEX)
+			f.Intrinsic.Control.If(v.Local.bEx,=,False) 
+				'file doesn't exist. log 
+				f.Intrinsic.Debug.SetLA("File: ", v.Local.sFile(v.Local.iR), " no longer found. Can't merge. ") 
+				v.Local.sFile(v.Local.iR).Set("")				
+			Function.Intrinsic.Control.EndIf
+			'concat the recipt 
+			F.Intrinsic.String.Build("{0}*!*{1}",v.DataTable.CEMAIL(v.Local.sRet(v.Local.iR)).RecipientName!FieldValTrim,v.DataTable.CEMAIL(v.Local.sRet(v.Local.iR)).RecipientEmail!FieldvalTrim,v.Local.sRecipients(v.Local.iR))			
+		f.Intrinsic.Control.Next(v.Local.iR) 	
+		'remove duplicates from the arrays 
+		F.Intrinsic.String.RemoveArrayDuplicates(v.Local.sRecipients,v.Local.sRecipients) 
+		'Merge or not? 	
+		f.Intrinsic.String.RemoveArrayDuplicates(v.Local.sFile,v.Local.sFile) 
+'		F.Intrinsic.Control.If(v.Local.sFile.UBound,>,0) 
+		F.Intrinsic.Control.If(v.Local.sFile.Length,>,0) 
+			v.Local.bMerge.Set(True) 
+		Function.Intrinsic.Control.Else
+			v.Local.bMerge.Set(False)
+			F.Intrinsic.Control.Next(V.Local.iC)
+		Function.Intrinsic.Control.EndIf
+		f.Intrinsic.String.SortAsc(v.Local.sFile,v.Local.sFile)	
+		F.Intrinsic.String.Join(v.Local.sFile,"*!*",v.Local.sFile) 
+		F.Intrinsic.String.Join(v.Local.sRecipients,"@!@",v.Local.sRecipients)		
+		F.Intrinsic.Control.If(v.Local.bMerge,=,True) 
+			'ok merge documents, this will return our new merged file with the multipages. FQN will be returnd.
+			Function.Intrinsic.Control.CallSub(mergepdf,"Files",v.Local.sFile,"CustName",v.Local.sCustName(0))
+			v.Local.sFile.Set(v.Args.Attachment) 			
+'		Function.Intrinsic.Control.Else 
+			'getilename from fqn
+'			F.Intrinsic.File.GetFileNameFromFQN(v.Local.sFile,v.Local.sFile)
+'			F.Intrinsic.String.Build("{0}.pdf",v.Local.sFile,V.Local.sPDFName)
+'			F.Intrinsic.String.Build("{0}*!*{1}\Plugins\Invoices",v.Local.sFile,v.Caller.GlobalDir,v.Local.sFile) 			
+		Function.Intrinsic.Control.EndIf
+		'then get the subject and body. 
+		Function.Intrinsic.Control.CallSub(subjectbodytext,"CustName",v.Local.sCustName(0))
+			'then create the email. 			
+		Function.Intrinsic.Control.If(v.Local.sFile.Trim,<>,"")
+'			F.Global.Messaging.QueueMessage(v.Caller.CompanyCode,-1,"GCG_4640_EInvoice_Consolidation_Merge.g2u",v.Args.Subject,v.Local.sSender,v.Local.sRecipients,v.Args.Body,5,"","","","","","","","","",v.Local.sFile,False) 
+			V.Local.iID.Set(V.DataTable.CEMAIL(V.Local.sRet).UserID!FieldValLong)
+			
+			'Replace LF by CRLF on the file to avoid email server issues with LF character 
+			F.Intrinsic.String.Concat(v.ASCII.13,v.ASCII.10,v.Local.sCRLF)'CRLF
+			F.Intrinsic.String.Replace(V.Args.Body,v.ASCII.10,v.Local.sCRLF,v.Local.sBody)
+			Function.Global.Messaging.QueueMessage(V.Caller.CompanyCode,V.Local.iID,"GCG_4640_EInvoice_Consolidation_Merge.g2u",v.Args.Subject,V.Local.sSender,v.Local.sRecipients,,5,,False,,,,V.Global.sPDFName,,,,v.Local.sFile,False,V.Local.sBody)
+		Function.Intrinsic.Control.EndIf
+		'then delete the old emails. 
+		f.Intrinsic.String.Join(v.Local.sRet,"*!*",v.Local.sRet) 
+		Function.Intrinsic.Control.CallSub(deleteemails,"sRet",v.Local.sRet)		
+	Function.Intrinsic.Control.EndIf 
+F.Intrinsic.Control.Next(v.Local.iC)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("ProcessEmails_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_4640_EInvoice_Consolidation_Merge.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.Debug.SetLA(V.Local.sError)
+	Function.Intrinsic.Control.CallSub(unload)
+Function.Intrinsic.Control.EndIf
+Program.Sub.ProcessEmails.End
+
+Program.Sub.MergePDF.Start
+F.Intrinsic.Control.SetErrorHandler("MergePDF_Err")
+F.Intrinsic.Control.ClearErrors
+v.Local.sCust.Declare(String)
+V.Local.sError.Declare(String)
+v.Local.sDir.Declare(String) 
+v.Local.sFile.Declare(String) 
+v.Local.bEx.Declare(Boolean)
+v.Local.sFQN.Declare(String)
+v.Local.sName.Declare(String)
+V.Local.i.Declare(Long)
+V.Local.sTemp.Declare(String)
+V.Local.bRet.Declare(Boolean)
+
+F.Intrinsic.String.Build("{0}\Plugins\Invoices",v.Caller.GlobalDir,v.Local.sDir)
+
+F.Intrinsic.File.DirExists(v.Local.sDir,v.Local.bEx) 
+Function.Intrinsic.Control.If(v.Local.bEx,=,False) 
+	f.Intrinsic.File.CreateDir(v.Local.sDir) 
+Function.Intrinsic.Control.EndIf
+
+f.Intrinsic.String.Build("{0}\Merged",v.Local.sDir,v.Local.sDir)
+F.Intrinsic.File.DirExists(v.Local.sDir,v.Local.bEx) 
+Function.Intrinsic.Control.If(v.Local.bEx,=,False) 
+	f.Intrinsic.File.CreateDir(v.Local.sDir) 
+Function.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("{0}_{1}.pdf",v.Args.custName,v.Ambient.Now.FormatMMDDYYYYHHNN,v.Local.sFile) 
+F.Intrinsic.File.MakeFileNameFriendly(v.Local.sFile,v.Local.sFile) 
+F.Intrinsic.String.Build("{0}\{1}",v.Local.sDir,v.Local.sFile,v.Local.sFQN) 
+'does this already exist. If it does. delete it. 
+F.Intrinsic.File.Exists(v.Local.sFQN,v.Local.bEx) 
+f.Intrinsic.Control.if(v.Local.bEx,=,True) 
+	F.Intrinsic.String.Build("{0}_{1}.pdf",v.Args.custName,v.Ambient.Now.FormatMMDDYYYYHHNNSS,v.Local.sFile)
+	V.Global.sPDFName.Set(V.Local.sFile)
+	F.Intrinsic.File.MakeFileNameFriendly(v.Local.sFile,v.Local.sFile) 
+	F.Intrinsic.String.Build("{0}\{1}",v.Local.sDir,v.Local.sFile,v.Local.sFQN)
+'	f.Intrinsic.File.DeleteFile(v.Local.sFQN) 
+Function.Intrinsic.Control.EndIf
+
+F.Automation.PDF.Merge(v.Args.Files,v.Local.sFQN) 
+
+F.Intrinsic.String.Split(V.Args.Files,"*!*",V.Local.sTemp)
+
+F.Intrinsic.Control.For(V.Local.i,0,V.Local.sTemp.UBound,1)
+	V.Local.bRet.Set(True)
+	F.Intrinsic.Control.DoUntil(V.Local.bRet,=,False)
+		F.Intrinsic.File.DeleteFile(V.Local.sTemp(V.Local.i))
+		F.Intrinsic.File.Exists(V.Local.sTemp(V.Local.i),V.Local.bRet)
+	F.Intrinsic.Control.Loop
+F.Intrinsic.Control.Next(V.Local.i)
+
+'does it exist? 
+f.Intrinsic.File.Exists(v.Local.sFQN,v.Local.bEx) 
+f.Intrinsic.Control.If(v.Local.bEx,=,False) 
+	f.Intrinsic.Debug.SetLA("File: ",v.Local.sFQN," could not be created.") 
+	v.Local.sFile.Set("")
+Function.Intrinsic.Control.Else
+	f.Intrinsic.String.Build("{0}*!*{1}",v.Local.sFile.Trim,v.Local.sDir,v.Local.sFile) 	
+Function.Intrinsic.Control.EndIf
+
+F.Intrinsic.Variable.AddRV("Attachment",v.Local.sFile) 
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("MergePDF_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_4640_EInvoice_Consolidation_Merge.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.Debug.SetLA(V.Local.sError)
+	Function.Intrinsic.Control.CallSub(unload)
+Function.Intrinsic.Control.EndIf
+Program.Sub.MergePDF.End
+
+Program.Sub.SubjectBodyText.Start
+F.Intrinsic.Control.SetErrorHandler("SubjectBodyText_Err")
+F.Intrinsic.Control.ClearErrors
+V.Local.sError.Declare(String)
+v.Local.sFile.Declare(String)
+v.Local.sDir.Declare(String) 
+V.Local.bExists.Declare(Boolean)
+v.Local.sText.Declare(STring)
+V.Local.sBody.Declare(STring) 
+v.Local.sSubject.Declare(String)
+V.Local.sDate.Declare(String)
+
+F.Intrinsic.String.Build("{0}\4640_E-Invoice_Subject.txt",V.Caller.FilesDir,V.Local.sFile)
+F.Intrinsic.File.Exists(V.Local.sFile,V.Local.bExists)
+f.Intrinsic.Control.If(v.Local.bExists,=,True) 
+	f.Intrinsic.File.File2String(v.Local.sFile,v.Local.sSubject)
+	F.Intrinsic.String.Replace(V.Local.sSubject,"{{CUSTOMER}}",V.args.CustName,V.Local.sSubject)
+F.Intrinsic.Control.Else
+	V.Local.sSubject.Set("Attached are your invoice(s). Thank you.")
+Function.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("{0}\Plugins\GAB\GAS",v.Caller.GlobalDir,v.Local.sDir) 
+F.Intrinsic.String.Build("{0}\eInvoicing_Body_Text_{1}.htm",v.Local.sDir,v.Caller.CompanyCode,v.Local.sFile) 
+
+F.Intrinsic.File.Exists(v.Local.sFile,v.Local.bExists) 
+
+f.Intrinsic.Control.If(v.Local.bExists,=,True) 
+	f.Intrinsic.File.File2String(v.Local.sFile,v.Local.sText)
+Function.Intrinsic.Control.Else
+	'look for the default
+	f.Intrinsic.String.Build("{0}\eInvoicing_Body_Text_ccc.htm",v.Local.sDir,v.Local.sFile) 
+	f.Intrinsic.File.Exists(v.Local.sFile,v.Local.bExists) 
+	f.Intrinsic.Control.If(v.Local.bExists,=,True) 
+		f.Intrinsic.File.File2String(v.Local.sFile,v.Local.sText)
+	Function.Intrinsic.Control.Else 
+		'if that doesn't exist use default. 
+		v.Local.sText.Set("Attached are your invoice(s). Thank you.") 
+	Function.Intrinsic.Control.EndIf	
+Function.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Replace(V.Local.sText,"{{CUSTOMER}}",V.args.CustName,V.Local.sText)
+F.Intrinsic.String.Replace(V.Local.sText,"{{COMPANY}}",V.Ambient.CompanyName,V.Local.sText)
+F.Intrinsic.String.Replace(V.Local.sText,"{{DATE}}",Variable.ambient.date.formatddddd,V.Local.sText)
+
+V.Local.sBody.Set(V.Local.sText)
+
+F.Intrinsic.Variable.AddRV("Body",V.Local.sBody)
+F.Intrinsic.Variable.AddRV("Subject",V.Local.sSubject)
+
+F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.Label("SubjectBodyText_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_4640_EInvoice_Consolidation_Merge.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	Function.Intrinsic.Debug.SetLA(v.Local.sError)
+	Function.Intrinsic.Control.CallSub(unload)
+Function.Intrinsic.Control.EndIf
+Program.Sub.SubjectBodyText.End
+
+Program.Sub.DeleteEmails.Start
+F.Intrinsic.Control.SetErrorHandler("DeleteEmails_Err")
+F.Intrinsic.Control.ClearErrors
+V.Local.sError.Declare(String)
+v.Local.sRet.Declare(String)
+v.Local.iR.Declare(Long)
+v.Local.sRet.Set(v.Args.sREt)
+
+F.Intrinsic.String.Split(v.Local.sRet,"*!*",v.Local.sRet) 
+F.Intrinsic.Control.For(v.Local.iR,0,v.Local.sRet.UBound,1)
+	F.Global.Messaging.DeleteMessage(v.DataTable.CEMAIL(v.Local.sRet(v.Local.iR)).EID!FieldValTrim)
+f.Intrinsic.Control.Next(v.Local.iR)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("DeleteEmails_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_4640_EInvoice_Consolidation_Merge.g2u",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.Debug.SetLA(V.Local.sError)
+	Function.Intrinsic.Control.CallSub(unload)
+Function.Intrinsic.Control.EndIf
+Program.Sub.DeleteEmails.End
+
+Program.Sub.Comments.Start
+${$0$}$GCG_4210_EInvoice_Consolidation_Merge.g2u$}$TRT$}$11/29/2016 10:39:52 AM$}$False
+Program.Sub.Comments.End
